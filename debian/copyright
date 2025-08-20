@@ -1,0 +1,105 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: fxload
+Upstream-Contact: https://sourceforge.net/projects/linux-hotplug
+Source: https://sourceforge.net/projects/linux-hotplug/files/fxload/2008_10_13/fxload-2008_10_13.tar.gz
+
+Files:     debian/*
+           Makefile
+Copyright: 2025 Matteo Piscitelli <matteo@matteopiscitelli.it>
+License:   GPL-3.0+
+ This source code is free software; you can redistribute it
+ and/or modify it in source code form under the terms of the GNU
+ General Public License as published by the Free Software
+ Foundation; either version 3 of the License, or (at your option)
+ any later version.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program; if not, write to the Free Software
+ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ .
+ The FSF address in the above text is the old one.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ Version 3 can be found in `/usr/share/common-licenses/GPL-3'.
+
+Files:     ezusb.c
+           ezusb.h
+           main.c
+           README.txt
+Copyright: 2001 Stephen Williams (steve@icarus.com)
+           2001-2002 David Brownell (dbrownell@users.sourceforge.net)
+           2008 Roger Williams (rawqux@users.sourceforge.net)
+           2012 Steve Magnani (steve@digidescorp.com)
+License:   GPL-2.0+
+ This source code is free software; you can redistribute it
+ and/or modify it in source code form under the terms of the GNU
+ General Public License as published by the Free Software
+ Foundation; either version 2 of the License, or (at your option)
+ any later version.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program; if not, write to the Free Software
+ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ .
+ The FSF address in the above text is the old one.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ Version 2 can be found in `/usr/share/common-licenses/GPL-2'.
+
+Files:     a3load.hex
+Copyright: 2001-2002 Cypress Semiconductor Corporation
+License:   __UNKNOWN__
+ Cypress Semiconductor Corporation hereby grants a copyright license to
+ use or redistribute this firmware image, in text or binary form as
+ required, only in conjunction with devices using a Cypress USB
+ microcontroller.  Every copy in any form of the firmware shall include
+ Cypress copyright legends.
+ .
+ DISCLAIMERS.
+ THIS FIRMWARE IS LICENSED "AS-IS." CYPRESS MAKES NO WARRANTIES AS TO
+ PERFORMANCE, WHETHER EXPRESS, IMPLIED, OR STATUTORY, IN THIS LICENSE
+ OR COMMUNICATION BETWEEN LICENSEE AND CYPRESS. CYPRESS SPECIFICALLY
+ DISCLAIMS ALL WARRANTIES, EXPRESS, IMPLIED, OR STATUTORY, INCLUDING
+ BUT NOT LIMITED TO THE IMPLIED WARRANTY OF MERCHANTABILITY OR FITNESS
+ OF THIS PROGRAM FOR A PARTICULAR PURPOSE, WITH RESPECT TO THE
+ FIRMWARE, AND THE USE, OPERATION OR SUPPORT OF THE FIRMWARE.
+ IN NO EVENT SHALL CYPRESS BE LIABLE FOR ANY CONSEQUENTIAL, INDIRECT,
+ INCIDENTAL, PUNITIVE, OR SPECIAL DAMAGES WHATSOEVER, INCLUDING WITHOUT
+ LIMITATION, DAMAGES FOR LOSS OF BUSINESS PROFITS, BUSINESS
+ INTERRUPTION, LOSS OF BUSINESS INFORMATION, AND THE LIKE, ARISING OUT
+ OF OR RELATED TO THE FIRMWARE, EVEN IF CYPRESS HAS BEEN ADVISED OF THE
+ POSSIBILITY OF SUCH DAMAGES.
+
+Files:     fxload.8
+Copyright: 2001-2002 David Brownell <dbrownell@users.sourceforge.net>
+           2008 Roger Williams <rawqux@users.sourceforge.net>
+License:   __UNKNOWN__
+ Permission is granted to make and distribute verbatim copies of this
+ manual provided the copyright notice and this permission notice are
+ preserved on all copies.
+ .
+ Permission is granted to copy and distribute modified versions of this
+ manual under the conditions for verbatim copying, provided that the
+ entire resulting derived work is distributed under the terms of a
+ permission notice identical to this one
+ .
+ Since the Linux kernel and libraries are constantly changing, this
+ manual page may be incorrect or out-of-date.  The author(s) assume no
+ responsibility for errors or omissions, or for damages resulting from
+ the use of the information contained herein.  The author(s) may not
+ have taken the same level of care in the production of this manual,
+ which is licensed free of charge, as they might when working
+ professionally.
+ .
+ Formatted or processed versions of this manual, if unaccompanied by
+ the source, must acknowledge the copyright and authors of this work.

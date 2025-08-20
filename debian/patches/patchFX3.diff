@@ -1,0 +1,603 @@
+diff -u -r fxload-2008_10_13/ezusb.c fxload/ezusb.c
+--- fxload-2008_10_13/ezusb.c	2008-10-13 23:44:04.000000000 +0200
++++ fxload/ezusb.c	2025-07-06 15:50:21.485036823 +0200
+@@ -2,6 +2,7 @@
+  * Copyright (c) 2001 Stephen Williams (steve@icarus.com)
+  * Copyright (c) 2001-2002 David Brownell (dbrownell@users.sourceforge.net)
+  * Copyright (c) 2008 Roger Williams (rawqux@users.sourceforge.net)
++ * Copyright (c) 2012 Steve Magnani (steve@digidescorp.com)
+  *
+  *    This source code is free software; you can redistribute it
+  *    and/or modify it in source code form under the terms of the GNU
+@@ -22,10 +23,13 @@
+ 
+ # include  <stdio.h>
+ # include  <errno.h>
++# include  <fcntl.h>
+ # include  <assert.h>
+ # include  <limits.h>
++# include  <stdint.h>
+ # include  <stdlib.h>
+ # include  <string.h>
++# include  <unistd.h>
+ 
+ # include  <sys/ioctl.h>
+ 
+@@ -33,6 +37,11 @@
+ # include  <linux/usb/ch9.h>
+ # include  <linux/usbdevice_fs.h>
+ 
++#ifndef _BSD_SOURCE
++#define _BSD_SOURCE
++#endif
++#include <endian.h>
++
+ # include "ezusb.h"
+ 
+ extern void logerror(const char *format, ...)
+@@ -63,7 +72,7 @@
+  * return true iff [addr,addr+len) includes external RAM
+  * for Anchorchips EZ-USB or Cypress EZ-USB FX
+  */
+-static int fx_is_external (unsigned short addr, size_t len)
++static int fx_is_external (unsigned int addr, size_t len)
+ {
+     /* with 8KB RAM, 0x0000-0x1b3f can be written
+      * we can't tell if it's a 4KB device here
+@@ -82,7 +91,7 @@
+  * return true iff [addr,addr+len) includes external RAM
+  * for Cypress EZ-USB FX2
+  */
+-static int fx2_is_external (unsigned short addr, size_t len)
++static int fx2_is_external (unsigned int addr, size_t len)
+ {
+     /* 1st 8KB for data/code, 0x0000-0x1fff */
+     if (addr <= 0x1fff)
+@@ -101,7 +110,7 @@
+  * return true iff [addr,addr+len) includes external RAM
+  * for Cypress EZ-USB FX2LP
+  */
+-static int fx2lp_is_external (unsigned short addr, size_t len)
++static int fx2lp_is_external (unsigned int addr, size_t len)
+ {
+     /* 1st 16KB for data/code, 0x0000-0x3fff */
+     if (addr <= 0x3fff)
+@@ -117,6 +126,25 @@
+ }
+ 
+ /*****************************************************************************/
++/*
++ * Read num_bytes from fd into buf.
++ * Report any errors.
++ */
++int read_fd(int fd, void *buf, size_t num_bytes)
++{
++    ssize_t bytes_read = read(fd, buf, num_bytes);
++
++    if (bytes_read != num_bytes) {
++	if (bytes_read < 0)
++	    logerror("Error reading file: %s\n", strerror(errno));
++	else
++	    logerror("Truncated file\n");
++    }
++
++    return (bytes_read == num_bytes);
++}
++
++/*****************************************************************************/
+ 
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(2,5,3)
+ /*
+@@ -214,17 +242,17 @@
+     int					device,
+     char				*label,
+     unsigned char			opcode,
+-    unsigned short			addr,
++    unsigned int			addr,
+     const unsigned char			*data,
+     size_t				len
+ ) {
+     int					status;
+ 
+     if (verbose)
+-	logerror("%s, addr 0x%04x len %4zd (0x%04zx)\n", label, addr, len, len);
++	logerror("%s, addr 0x%05x len %4zd (0x%04zx)\n", label, addr, len, len);
+     status = ctrl_msg (device,
+ 	USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE, opcode,
+-	addr, 0,
++	addr & 0xFFFF, addr >> 16,
+ 	(unsigned char *) data, len);
+     if (status != len) {
+ 	if (status < 0)
+@@ -296,8 +324,8 @@
+ int parse_ihex (
+     FILE	*image,
+     void	*context,
+-    int		(*is_external)(unsigned short addr, size_t len),
+-    int		(*poke) (void *context, unsigned short addr, int external,
++    int		(*is_external)(unsigned int addr, size_t len),
++    int		(*poke) (void *context, unsigned int addr, int external,
+ 		      const unsigned char *data, size_t len)
+ )
+ {
+@@ -430,6 +458,90 @@
+     return 0;
+ }
+ 
++/*
++ * Parse a FX3 '.img' file and invoke the poke() function on the
++ * various segments to implement policies such as writing to RAM (with
++ * a one or two stage loader setup, depending on the firmware) or to
++ * EEPROM (two stages required).
++ *
++ * img_fd	- the image file
++ * context	- for use by poke()
++ * poke		- called with each memory segment; errors indicated
++ *		  by returning negative values.
++ *
++ * Caller is responsible for halting CPU as needed, such as when
++ * overwriting a second stage loader.
++ */
++int parse_img (
++    int		img_fd,
++    void	*context,
++    int 	(*poke) (void *context, unsigned int addr, int external,
++		      const unsigned char *data, size_t len)
++)
++{
++    unsigned char	header[4];
++    unsigned char	data[4096];
++    int			rc = -1;
++
++    /* Validate the header */
++    if (!read_fd(img_fd, header, sizeof(header)))
++	return -1;
++
++    if ((header[0] != 'C') || (header[1] != 'Y')) {
++	logerror("Invalid file: missing CYpress signature\n");
++	return -1;
++    }
++
++    if (header[3] != 0xB0) {
++	logerror("Invalid file: format 0x%02X, expected 0xB0\n", header[3]);
++	return -1;
++    }
++
++    /* Now process data segments */
++    do {
++	uint32_t  segment_addr, cur_addr;
++	uint32_t  segment_len, bytes_remaining, bytes_this_chunk;
++
++	rc = -1;	/* In case of error */
++	if (!read_fd(img_fd, &segment_len, sizeof(segment_len)))
++	    break;
++
++	if (!read_fd(img_fd, &segment_addr, sizeof(segment_addr)))
++	    break;
++
++	segment_len  = le32toh(segment_len) << 2;
++	segment_addr = le32toh(segment_addr);
++
++	cur_addr        = segment_addr;
++	bytes_remaining = segment_len;
++
++	/* Make sure we poke() if segment_len == 0,
++	 * as FX3 interprets this as a "run from address" command
++	 */
++
++	do {
++	    bytes_this_chunk = bytes_remaining;
++	    if (bytes_this_chunk > sizeof(data))
++		bytes_this_chunk = sizeof(data);
++
++	    if (bytes_this_chunk && !read_fd(img_fd, data, bytes_this_chunk)) {
++		rc = -1;
++		break;
++	    }
++
++	    rc = poke (context, cur_addr, 0, data, bytes_this_chunk);
++
++	    cur_addr        += bytes_this_chunk;
++	    bytes_remaining -= bytes_this_chunk;
++	} while ((rc == 0) && (bytes_remaining > 0));
++
++	if (segment_len == 0)
++	    break;
++
++    } while (rc == 0);
++
++    return rc;
++}
+ 
+ /*****************************************************************************/
+ 
+@@ -454,7 +566,7 @@
+ 
+ static int ram_poke (
+     void		*context,
+-    unsigned short	addr,
++    unsigned int	addr,
+     int			external,
+     const unsigned char	*data,
+     size_t		len
+@@ -466,7 +578,7 @@
+     switch (ctx->mode) {
+     case internal_only:		/* CPU should be stopped */
+ 	if (external) {
+-	    logerror("can't write %zd bytes external memory at 0x%04x\n",
++	    logerror("can't write %zd bytes external memory at 0x%05x\n",
+ 		len, addr);
+ 	    return -EINVAL;
+ 	}
+@@ -474,7 +586,7 @@
+     case skip_internal:		/* CPU must be running */
+ 	if (!external) {
+ 	    if (verbose >= 2) {
+-		logerror("SKIP on-chip RAM, %zd bytes at 0x%04x\n",
++		logerror("SKIP on-chip RAM, %zd bytes at 0x%05x\n",
+ 		    len, addr);
+ 	    }
+ 	    return 0;
+@@ -483,7 +595,7 @@
+     case skip_external:		/* CPU should be stopped */
+ 	if (external) {
+ 	    if (verbose >= 2) {
+-		logerror("SKIP external RAM, %zd bytes at 0x%04x\n",
++		logerror("SKIP external RAM, %zd bytes at 0x%05x\n",
+ 		    len, addr);
+ 	    }
+ 	    return 0;
+@@ -513,6 +625,51 @@
+ }
+ 
+ /*
++ * Load a FX3 'img' file into target RAM. The dev_fd is the open "usbfs"
++ * device, and the path is the name of the source file. Open the file,
++ * parse the bytes, and write them in one or two phases.
++ *
++ * This uses the first stage loader, built into FX3 hardware but limited
++ * to writing on-chip memory.  Everything is written during one stage.
++ */
++static int fx3_load_ram (int dev_fd, const char *path, int stage)
++{
++    int				image_fd;
++    struct ram_poke_context	ctx;
++    int				status;
++
++    if (stage != 0) {
++	logerror("Two-stage load not yet supported for FX3\n");
++	return -1;
++    }
++
++    image_fd = open(path, O_RDONLY);
++    if (image_fd < 0) {
++	logerror("%s: unable to open for input.\n", path);
++	return -2;
++    } else if (verbose)
++	logerror("open RAM image %s\n", path);
++
++    ctx.device = dev_fd;
++    ctx.total  = 0;
++    ctx.count  = 0;
++    ctx.mode   = internal_only;
++
++    status = parse_img(image_fd, &ctx, ram_poke);
++    if (status < 0) {
++	logerror("unable to download %s\n", path);
++	return status;
++    }
++
++    if (verbose) {
++	logerror("... WROTE: %d bytes, %d segments, avg %d\n",
++	    ctx.total, ctx.count, ctx.total / ctx.count);
++    }
++
++    return 0;
++}
++
++/*
+  * Load an Intel HEX file into target RAM. The fd is the open "usbfs"
+  * device, and the path is the name of the source file. Open the file,
+  * parse the bytes, and write them in one or two phases.
+@@ -526,14 +683,19 @@
+  * memory is written, expecting a second stage loader to have already
+  * been loaded.  Then file is re-parsed and on-chip memory is written.
+  */
+-int ezusb_load_ram (int fd, const char *path, int fx2, int stage)
++int ezusb_load_ram (int fd, const char *path, const char *type, int stage)
+ {
+     FILE			*image;
+     unsigned short		cpucs_addr;
+-    int				(*is_external)(unsigned short off, size_t len);
++    int				(*is_external)(unsigned int off, size_t len);
+     struct ram_poke_context	ctx;
+     int				status;
+ 
++    /* FX3 loading differs significantly from that of previous devices */
++    if (strcmp(type, "fx3") == 0)
++	return fx3_load_ram (fd, path, stage);
++
++
+     image = fopen (path, "r");
+     if (image == 0) {
+ 	logerror("%s: unable to open for input.\n", path);
+@@ -542,10 +704,10 @@
+ 	logerror("open RAM hexfile image %s\n", path);
+ 
+     /* EZ-USB original/FX and FX2 devices differ, apart from the 8051 core */
+-    if (fx2 == 2) {
++    if (strcmp(type, "fx2lp") == 0) {
+ 	cpucs_addr = 0xe600;
+ 	is_external = fx2lp_is_external;
+-    } else if (fx2) {
++    } else if (strcmp(type, "fx2") == 0) {
+ 	cpucs_addr = 0xe600;
+ 	is_external = fx2_is_external;
+     } else {
+@@ -622,7 +784,7 @@
+ 
+ static int eeprom_poke (
+     void		*context,
+-    unsigned short	addr,
++    unsigned int	addr,
+     int			external,
+     const unsigned char	*data,
+     size_t		len
+@@ -633,7 +795,7 @@
+ 
+     if (external) {
+       logerror(
+-	    "EEPROM can't init %zd bytes external memory at 0x%04x\n",
++	    "EEPROM can't init %zd bytes external memory at 0x%05x\n",
+ 	    len, addr);
+ 	return -EINVAL;
+     }
+@@ -683,11 +845,16 @@
+ {
+     FILE			*image;
+     unsigned short		cpucs_addr;
+-    int				(*is_external)(unsigned short off, size_t len);
++    int				(*is_external)(unsigned int off, size_t len);
+     struct eeprom_poke_context	ctx;
+     int				status;
+     unsigned char		value, first_byte;
+ 
++    if (strcmp ("fx3", type) == 0) {
++	logerror("FX3 EEPROM loading is not yet supported.\n");
++	return -1;
++    }
++
+     if (ezusb_get_eeprom_type (dev, &value) != 1 || value != 1) {
+ 	logerror("don't see a large enough EEPROM\n");
+ 	return -1;
+@@ -726,7 +893,7 @@
+ 	is_external = fx2lp_is_external;
+ 	ctx.ee_addr = 8;
+ 	config &= 0x4f;
+-	fprintf (stderr,
++	logerror (
+ 	    "FX2LP:  config = 0x%02x, %sconnected, I2C = %d KHz\n",
+ 	    config,
+ 	    (config & 0x40) ? "dis" : "",
+diff -u -r fxload-2008_10_13/ezusb.h fxload/ezusb.h
+--- fxload-2008_10_13/ezusb.h	2008-10-13 23:44:04.000000000 +0200
++++ fxload/ezusb.h	2025-07-06 15:50:21.485036823 +0200
+@@ -3,6 +3,7 @@
+ /*
+  * Copyright (c) 2001 Stephen Williams (steve@icarus.com)
+  * Copyright (c) 2002 David Brownell (dbrownell@users.sourceforge.net)
++ * Copyright (c) 2012 Steve Magnani (steve@digidescorp.com)
+  *
+  *    This source code is free software; you can redistribute it
+  *    and/or modify it in source code form under the terms of the GNU
+@@ -24,14 +25,16 @@
+ 
+ /*
+  * This function loads the firmware from the given file into RAM.
+- * The file is assumed to be in Intel HEX format.  If fx2 is set, uses
+- * appropriate reset commands.  Stage == 0 means this is a single stage
+- * load (or the first of two stages).  Otherwise it's the second of
+- * two stages; the caller preloaded the second stage loader.
++ * The file is assumed to be in Intel HEX format unless type is fx3.
++ * If type is fx2 or fx2lp, appropriate reset commands are used.  
++ * Stage == 0 means this is a single stage load (or the first of two stages).
++ * Otherwise it's the second of two stages; the caller preloaded the second
++ * stage loader.
+  *
+  * The target processor is reset at the end of this download.
+  */
+-extern int ezusb_load_ram (int dev, const char *path, int fx2, int stage);
++extern int ezusb_load_ram (int dev, const char *path, const char *type,
++	int stage);
+ 
+ 
+ /*
+diff -u -r fxload-2008_10_13/fxload.8 fxload/fxload.8
+--- fxload-2008_10_13/fxload.8	2008-10-13 23:44:04.000000000 +0200
++++ fxload/fxload.8	2025-07-06 15:50:21.485036823 +0200
+@@ -23,7 +23,7 @@
+ .\" Formatted or processed versions of this manual, if unaccompanied by
+ .\" the source, must acknowledge the copyright and authors of this work.
+ .\" 
+-.TH FXLOAD 8 "September 2008" "" "Linux Programmer's Manual"
++.TH FXLOAD 8 "April 2012" "" "Linux Programmer's Manual"
+ .SH "NAME"
+ fxload \- Firmware download to EZ-USB devices
+ .SH "SYNOPSIS"
+@@ -31,7 +31,7 @@
+ .BI "[ \-v ]"
+ .BI "[ \-l ]"
+ .BI "[ \-D " devpath " ]"
+-.BI "[ \-I " hexfile " ]"
++.BI "[ \-I " firmware " ]"
+ .BI "[ \-t " type " ]"
+ .BI "[ \-c " config " ]"
+ .BI "[ \-s " loader " ]"
+@@ -47,14 +47,17 @@
+ .B fxload
+ is a program which downloads firmware to USB devices based on
+ AnchorChips EZ-USB, Cypress EZ-USB FX,
+-or Cypress EZ-USB FX2/FX2LP microcontrollers.
++or Cypress EZ-USB FX2/FX2LP/FX3 microcontrollers.
+ These have 8-bit 8051 cores with special extensions for USB I/O.
+ The FX2 supports high speed USB 2.0 transfers (480 Mbit/sec)
+ as well as full speed USB 1.1 transfers (12 Mbit/sec),
+-while the earlier parts supports only full speed transfers.
++while the earlier parts support only full speed transfers.
++The FX3 supports super speed USB 3.0 transfers and has a 32-bit
++ARM core.
+ These controllers have several package options,
+ and can be set up with external memory (on-chip memory is
+-usually 8K or 16K), EEPROMs, and ROMs when device costs allow.
++usually 8K or 16K; for FX3, it is 512K), EEPROMs, and ROMs when
++device costs allow.
+ .PP
+ This uses "usbfs" (older name:  "usbdevfs") to access
+ devices, and issues vendor specific control requests
+@@ -87,13 +90,16 @@
+ the order of command option flags does not matter.
+ You may use these in any order.
+ .TP
+-.BI "\-I " hexfile
++.BI "\-I " firmware
+ Downloads the specified firmware file.
+-This firmware is provided in standard Intel hexfile format.
++For FX3 devices, the format is a Cypress-specific binary image.
++For other devices, the file has standard Intel hexfile format.
+ (Common naming conventions include
+ .I *.hex
+-and
+-.IR *.ihx .)
++, 
++.I *.ihx
++, and
++.IR *.img ).
+ Depending on the device and firmware in use, the
+ .B \-s
+ option may also be necessary to specify a second stage loader.
+@@ -146,8 +152,8 @@
+ you should retest it starting from power off.
+ .TP
+ .BI "\-s " loader
+-This identifies the hex file holding a second stage loader
+-(in the same hex file format as the firmware itself),
++This identifies the file holding a second stage loader
++(in the same file format as the firmware itself),
+ which is loaded into internal memory.
+ This loader understands additional vendor control requests,
+ beyond the one built into all EZ-USB hardware,
+@@ -163,13 +169,16 @@
+ .I an21
+ (the original AnchorChips devices),
+ .I fx
+-(Cypress' updated version, the EZ-USB FX), or
++(Cypress' updated version, the EZ-USB FX),
+ .I fx2
+-(the Cypress EZ-USB FX2, supporting high speed transfers), or
++(the Cypress EZ-USB FX2, supporting high speed transfers),
+ .I fx2lp
+-(the Cypress EZ-USB FX2LP, with 16KB internal RAM).
++(the Cypress EZ-USB FX2LP, with 16KB internal RAM), or
++.I fx3
++(the Cypress EZ-USB FX3, supporting USB 3.0).
+ Except when writing to EEPROM, all that normally matters when
+-downloading firmware is whether or not the device uses an FX2.
++downloading firmware is whether or not the device uses an FX2
++or FX3.
+ .TP
+ .B "\-v"
+ Prints some diagnostics, such as download addresses and sizes,
+@@ -213,7 +222,7 @@
+ is needed when writing boot firmware into an I2C EEPROM.
+ These 0xA2 and 0xA3 vendor commands are conventions defined by Cypress.
+ Devices that use bank switching or similar mechanisms to stretch the
+-64KByte address space may need different approach to loading firmware.
++64KByte address space may need different approaches to loading firmware.
+ .PP
+ Not all devices support EEPROM updates.
+ Some EZ-USB based devices don't have an I2C EEPROM;
+Only in fxload: fxload.spec
+diff -u -r fxload-2008_10_13/main.c fxload/main.c
+--- fxload-2008_10_13/main.c	2008-10-13 23:44:04.000000000 +0200
++++ fxload/main.c	2025-07-06 15:50:21.485036823 +0200
+@@ -2,6 +2,7 @@
+  * Copyright (c) 2001 Stephen Williams (steve@icarus.com)
+  * Copyright (c) 2001-2002 David Brownell (dbrownell@users.sourceforge.net)
+  * Copyright (c) 2008 Roger Williams (rawqux@users.sourceforge.net)
++ * Copyright (c) 2012 Steve Magnani (steve@digidescorp.com)
+  *
+  *    This source code is free software; you can redistribute it
+  *    and/or modify it in source code form under the terms of the GNU
+@@ -28,7 +29,7 @@
+  * looking for the device.
+  *
+  *     -I <path>       -- Download this firmware (intel hex)
+- *     -t <type>       -- uController type: an21, fx, fx2, fx2lp
++ *     -t <type>       -- uController type: an21, fx, fx2, fx2lp, fx3
+  *     -s <path>       -- use this second stage loader
+  *     -c <byte>       -- Download to EEPROM, with this config byte
+  *
+@@ -148,6 +149,7 @@
+ 		    && strcmp (optarg, "fx")	// updated Cypress versions
+ 		    && strcmp (optarg, "fx2")	// Cypress USB 2.0 versions
+ 		    && strcmp (optarg, "fx2lp")	// updated FX2
++		    && strcmp (optarg, "fx3")	// Cypress USB 3.0 versions
+ 		    ) {
+ 		logerror("illegal microcontroller type: %s\n", optarg);
+ 		goto usage;
+@@ -192,7 +194,7 @@
+ 	    fputs ("[-s loader] [-c config_byte]\n", stderr);
+ 	    fputs ("\t\t[-L link] [-m mode]\n", stderr);
+ 	    fputs ("... [-D devpath] overrides DEVICE= in env\n", stderr);
+-	    fputs ("... device types:  one of an21, fx, fx2, fx2lp\n", stderr);
++	    fputs ("... device types:  one of an21, fx, fx2, fx2lp, fx3\n", stderr);
+ 	    fputs ("... at least one of -I, -L, -m is required\n", stderr);
+ 	    return -1;
+       }
+@@ -200,7 +202,6 @@
+       if (ihex_path) {
+ 	    int fd = open(device_path, O_RDWR);
+ 	    int status;
+-	    int	fx2;
+ 
+ 	    if (fd == -1) {
+ 		logerror("%s : %s\n", strerror(errno), device_path);
+@@ -209,11 +210,7 @@
+ 
+ 	    if (type == 0) {
+ 		type = "fx";	/* an21-compatible for most purposes */
+-		fx2 = 0;
+-	    } else if (strcmp (type, "fx2lp") == 0)
+-                fx2 = 2;
+-            else
+-                fx2 = (strcmp (type, "fx2") == 0);
++	    }
+ 
+ 	    if (verbose)
+ 		logerror("microcontroller type: %s\n", type);
+@@ -222,7 +219,7 @@
+ 		/* first stage:  put loader into internal memory */
+ 		if (verbose)
+ 		    logerror("1st stage:  load 2nd stage loader\n");
+-		status = ezusb_load_ram (fd, stage1, fx2, 0);
++		status = ezusb_load_ram (fd, stage1, type, 0);
+ 		if (status != 0)
+ 		    return status;
+ 
+@@ -230,14 +227,14 @@
+ 		if (config >= 0)
+ 		    status = ezusb_load_eeprom (fd, ihex_path, type, config);
+ 		else
+-		    status = ezusb_load_ram (fd, ihex_path, fx2, 1);
++		    status = ezusb_load_ram (fd, ihex_path, type, 1);
+ 		if (status != 0)
+ 		    return status;
+ 	    } else {
+ 		/* single stage, put into internal memory */
+ 		if (verbose)
+ 		    logerror("single stage:  load on-chip memory\n");
+-		status = ezusb_load_ram (fd, ihex_path, fx2, 0);
++		status = ezusb_load_ram (fd, ihex_path, type, 0);
+ 		if (status != 0)
+ 		    return status;
+ 	    }

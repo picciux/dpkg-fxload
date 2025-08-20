@@ -1,0 +1,7 @@
+fxload for Debian
+
+This version is patched with some April 2012 mods by Steven J. Magnani
+<steve@digidescorp.com> to support the ez-usb devices using FX3 protocol.
+Also Makefile is patched to obey DESTDIR variable during install.
+
+ -- Matteo Piscitelli <matteo@matteopiscitelli.it>  Wed, 20 Aug 2025 16:57:40 +0000

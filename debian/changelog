@@ -1,0 +1,5 @@
+fxload (20081013-1+patch1) bookworm; urgency=low
+
+  * First package release.
+
+ -- Matteo Piscitelli <matteo@matteopiscitelli.it>  Wed, 20 Aug 2025 18:20:55 +0000
