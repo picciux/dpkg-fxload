@@ -59,9 +59,9 @@ clean:
 
 # install, from tarball or for binary RPM
 install: $(PROG)
-	$(INSTALL_PROGRAM) $(PROG) $(sbindir)/$(PROG)
-	$(INSTALL_PROGRAM) -m 0644 $(PROG).8 $(mandir)/man8/$(PROG).8
-	$(INSTALL_PROGRAM) -m 0644 a3load.hex $(prefix)/usr/share/usb/a3load.hex
+	$(INSTALL_PROGRAM) $(PROG) $(DESTDIR)/$(sbindir)/$(PROG)
+	$(INSTALL_PROGRAM) -m 0644 $(PROG).8 $(DESTDIR)/$(mandir)/man8/$(PROG).8
+	$(INSTALL_PROGRAM) -m 0644 a3load.hex $(DESTDIR)/$(prefix)/usr/share/usb/a3load.hex
 
 
 # make a source tarball

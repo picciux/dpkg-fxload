@@ -3,6 +3,7 @@
 /*
  * Copyright (c) 2001 Stephen Williams (steve@icarus.com)
  * Copyright (c) 2002 David Brownell (dbrownell@users.sourceforge.net)
+ * Copyright (c) 2012 Steve Magnani (steve@digidescorp.com)
  *
  *    This source code is free software; you can redistribute it
  *    and/or modify it in source code form under the terms of the GNU
@@ -24,14 +25,16 @@
 
 /*
  * This function loads the firmware from the given file into RAM.
- * The file is assumed to be in Intel HEX format.  If fx2 is set, uses
- * appropriate reset commands.  Stage == 0 means this is a single stage
- * load (or the first of two stages).  Otherwise it's the second of
- * two stages; the caller preloaded the second stage loader.
+ * The file is assumed to be in Intel HEX format unless type is fx3.
+ * If type is fx2 or fx2lp, appropriate reset commands are used.  
+ * Stage == 0 means this is a single stage load (or the first of two stages).
+ * Otherwise it's the second of two stages; the caller preloaded the second
+ * stage loader.
  *
  * The target processor is reset at the end of this download.
  */
-extern int ezusb_load_ram (int dev, const char *path, int fx2, int stage);
+extern int ezusb_load_ram (int dev, const char *path, const char *type,
+	int stage);
 
 
 /*
