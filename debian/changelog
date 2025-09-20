@@ -1,4 +1,4 @@
-fxload (20081013-1+patch1) bookworm; urgency=low
+fxload (0.0.20081013+patch1-1) bookworm; urgency=low
 
   * First package release.
 
