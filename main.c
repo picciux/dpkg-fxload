@@ -2,6 +2,7 @@
  * Copyright (c) 2001 Stephen Williams (steve@icarus.com)
  * Copyright (c) 2001-2002 David Brownell (dbrownell@users.sourceforge.net)
  * Copyright (c) 2008 Roger Williams (rawqux@users.sourceforge.net)
+ * Copyright (c) 2012 Steve Magnani (steve@digidescorp.com)
  *
  *    This source code is free software; you can redistribute it
  *    and/or modify it in source code form under the terms of the GNU
@@ -28,7 +29,7 @@
  * looking for the device.
  *
  *     -I <path>       -- Download this firmware (intel hex)
- *     -t <type>       -- uController type: an21, fx, fx2, fx2lp
+ *     -t <type>       -- uController type: an21, fx, fx2, fx2lp, fx3
  *     -s <path>       -- use this second stage loader
  *     -c <byte>       -- Download to EEPROM, with this config byte
  *
@@ -148,6 +149,7 @@ int main(int argc, char*argv[])
 		    && strcmp (optarg, "fx")	// updated Cypress versions
 		    && strcmp (optarg, "fx2")	// Cypress USB 2.0 versions
 		    && strcmp (optarg, "fx2lp")	// updated FX2
+		    && strcmp (optarg, "fx3")	// Cypress USB 3.0 versions
 		    ) {
 		logerror("illegal microcontroller type: %s\n", optarg);
 		goto usage;
@@ -192,7 +194,7 @@ usage:
 	    fputs ("[-s loader] [-c config_byte]\n", stderr);
 	    fputs ("\t\t[-L link] [-m mode]\n", stderr);
 	    fputs ("... [-D devpath] overrides DEVICE= in env\n", stderr);
-	    fputs ("... device types:  one of an21, fx, fx2, fx2lp\n", stderr);
+	    fputs ("... device types:  one of an21, fx, fx2, fx2lp, fx3\n", stderr);
 	    fputs ("... at least one of -I, -L, -m is required\n", stderr);
 	    return -1;
       }
@@ -200,7 +202,6 @@ usage:
       if (ihex_path) {
 	    int fd = open(device_path, O_RDWR);
 	    int status;
-	    int	fx2;
 
 	    if (fd == -1) {
 		logerror("%s : %s\n", strerror(errno), device_path);
@@ -209,11 +210,7 @@ usage:
 
 	    if (type == 0) {
 		type = "fx";	/* an21-compatible for most purposes */
-		fx2 = 0;
-	    } else if (strcmp (type, "fx2lp") == 0)
-                fx2 = 2;
-            else
-                fx2 = (strcmp (type, "fx2") == 0);
+	    }
 
 	    if (verbose)
 		logerror("microcontroller type: %s\n", type);
@@ -222,7 +219,7 @@ usage:
 		/* first stage:  put loader into internal memory */
 		if (verbose)
 		    logerror("1st stage:  load 2nd stage loader\n");
-		status = ezusb_load_ram (fd, stage1, fx2, 0);
+		status = ezusb_load_ram (fd, stage1, type, 0);
 		if (status != 0)
 		    return status;
 
@@ -230,14 +227,14 @@ usage:
 		if (config >= 0)
 		    status = ezusb_load_eeprom (fd, ihex_path, type, config);
 		else
-		    status = ezusb_load_ram (fd, ihex_path, fx2, 1);
+		    status = ezusb_load_ram (fd, ihex_path, type, 1);
 		if (status != 0)
 		    return status;
 	    } else {
 		/* single stage, put into internal memory */
 		if (verbose)
 		    logerror("single stage:  load on-chip memory\n");
-		status = ezusb_load_ram (fd, ihex_path, fx2, 0);
+		status = ezusb_load_ram (fd, ihex_path, type, 0);
 		if (status != 0)
 		    return status;
 	    }

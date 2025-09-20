@@ -23,7 +23,7 @@
 .\" Formatted or processed versions of this manual, if unaccompanied by
 .\" the source, must acknowledge the copyright and authors of this work.
 .\" 
-.TH FXLOAD 8 "September 2008" "" "Linux Programmer's Manual"
+.TH FXLOAD 8 "April 2012" "" "Linux Programmer's Manual"
 .SH "NAME"
 fxload \- Firmware download to EZ-USB devices
 .SH "SYNOPSIS"
@@ -31,7 +31,7 @@ fxload \- Firmware download to EZ-USB devices
 .BI "[ \-v ]"
 .BI "[ \-l ]"
 .BI "[ \-D " devpath " ]"
-.BI "[ \-I " hexfile " ]"
+.BI "[ \-I " firmware " ]"
 .BI "[ \-t " type " ]"
 .BI "[ \-c " config " ]"
 .BI "[ \-s " loader " ]"
@@ -47,14 +47,17 @@ fxload \- Firmware download to EZ-USB devices
 .B fxload
 is a program which downloads firmware to USB devices based on
 AnchorChips EZ-USB, Cypress EZ-USB FX,
-or Cypress EZ-USB FX2/FX2LP microcontrollers.
+or Cypress EZ-USB FX2/FX2LP/FX3 microcontrollers.
 These have 8-bit 8051 cores with special extensions for USB I/O.
 The FX2 supports high speed USB 2.0 transfers (480 Mbit/sec)
 as well as full speed USB 1.1 transfers (12 Mbit/sec),
-while the earlier parts supports only full speed transfers.
+while the earlier parts support only full speed transfers.
+The FX3 supports super speed USB 3.0 transfers and has a 32-bit
+ARM core.
 These controllers have several package options,
 and can be set up with external memory (on-chip memory is
-usually 8K or 16K), EEPROMs, and ROMs when device costs allow.
+usually 8K or 16K; for FX3, it is 512K), EEPROMs, and ROMs when
+device costs allow.
 .PP
 This uses "usbfs" (older name:  "usbdevfs") to access
 devices, and issues vendor specific control requests
@@ -87,13 +90,16 @@ Note that as usual with UNIX and Linux commands,
 the order of command option flags does not matter.
 You may use these in any order.
 .TP
-.BI "\-I " hexfile
+.BI "\-I " firmware
 Downloads the specified firmware file.
-This firmware is provided in standard Intel hexfile format.
+For FX3 devices, the format is a Cypress-specific binary image.
+For other devices, the file has standard Intel hexfile format.
 (Common naming conventions include
 .I *.hex
-and
-.IR *.ihx .)
+, 
+.I *.ihx
+, and
+.IR *.img ).
 Depending on the device and firmware in use, the
 .B \-s
 option may also be necessary to specify a second stage loader.
@@ -146,8 +152,8 @@ After downloading to a device's EEPROM,
 you should retest it starting from power off.
 .TP
 .BI "\-s " loader
-This identifies the hex file holding a second stage loader
-(in the same hex file format as the firmware itself),
+This identifies the file holding a second stage loader
+(in the same file format as the firmware itself),
 which is loaded into internal memory.
 This loader understands additional vendor control requests,
 beyond the one built into all EZ-USB hardware,
@@ -163,13 +169,16 @@ type may be one of
 .I an21
 (the original AnchorChips devices),
 .I fx
-(Cypress' updated version, the EZ-USB FX), or
+(Cypress' updated version, the EZ-USB FX),
 .I fx2
-(the Cypress EZ-USB FX2, supporting high speed transfers), or
+(the Cypress EZ-USB FX2, supporting high speed transfers),
 .I fx2lp
-(the Cypress EZ-USB FX2LP, with 16KB internal RAM).
+(the Cypress EZ-USB FX2LP, with 16KB internal RAM), or
+.I fx3
+(the Cypress EZ-USB FX3, supporting USB 3.0).
 Except when writing to EEPROM, all that normally matters when
-downloading firmware is whether or not the device uses an FX2.
+downloading firmware is whether or not the device uses an FX2
+or FX3.
 .TP
 .B "\-v"
 Prints some diagnostics, such as download addresses and sizes,
@@ -213,7 +222,7 @@ Similarly, a second stage loader that supports the 0xA2 vendor request
 is needed when writing boot firmware into an I2C EEPROM.
 These 0xA2 and 0xA3 vendor commands are conventions defined by Cypress.
 Devices that use bank switching or similar mechanisms to stretch the
-64KByte address space may need different approach to loading firmware.
+64KByte address space may need different approaches to loading firmware.
 .PP
 Not all devices support EEPROM updates.
 Some EZ-USB based devices don't have an I2C EEPROM;

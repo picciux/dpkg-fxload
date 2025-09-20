@@ -2,6 +2,7 @@
  * Copyright (c) 2001 Stephen Williams (steve@icarus.com)
  * Copyright (c) 2001-2002 David Brownell (dbrownell@users.sourceforge.net)
  * Copyright (c) 2008 Roger Williams (rawqux@users.sourceforge.net)
+ * Copyright (c) 2012 Steve Magnani (steve@digidescorp.com)
  *
  *    This source code is free software; you can redistribute it
  *    and/or modify it in source code form under the terms of the GNU
@@ -22,16 +23,24 @@
 
 # include  <stdio.h>
 # include  <errno.h>
+# include  <fcntl.h>
 # include  <assert.h>
 # include  <limits.h>
+# include  <stdint.h>
 # include  <stdlib.h>
 # include  <string.h>
+# include  <unistd.h>
 
 # include  <sys/ioctl.h>
 
 # include  <linux/version.h>
 # include  <linux/usb/ch9.h>
 # include  <linux/usbdevice_fs.h>
+
+#ifndef _BSD_SOURCE
+#define _BSD_SOURCE
+#endif
+#include <endian.h>
 
 # include "ezusb.h"
 
@@ -63,7 +72,7 @@ int verbose;
  * return true iff [addr,addr+len) includes external RAM
  * for Anchorchips EZ-USB or Cypress EZ-USB FX
  */
-static int fx_is_external (unsigned short addr, size_t len)
+static int fx_is_external (unsigned int addr, size_t len)
 {
     /* with 8KB RAM, 0x0000-0x1b3f can be written
      * we can't tell if it's a 4KB device here
@@ -82,7 +91,7 @@ static int fx_is_external (unsigned short addr, size_t len)
  * return true iff [addr,addr+len) includes external RAM
  * for Cypress EZ-USB FX2
  */
-static int fx2_is_external (unsigned short addr, size_t len)
+static int fx2_is_external (unsigned int addr, size_t len)
 {
     /* 1st 8KB for data/code, 0x0000-0x1fff */
     if (addr <= 0x1fff)
@@ -101,7 +110,7 @@ static int fx2_is_external (unsigned short addr, size_t len)
  * return true iff [addr,addr+len) includes external RAM
  * for Cypress EZ-USB FX2LP
  */
-static int fx2lp_is_external (unsigned short addr, size_t len)
+static int fx2lp_is_external (unsigned int addr, size_t len)
 {
     /* 1st 16KB for data/code, 0x0000-0x3fff */
     if (addr <= 0x3fff)
@@ -114,6 +123,25 @@ static int fx2lp_is_external (unsigned short addr, size_t len)
     /* otherwise, it's certainly external */
     else
 	return 1;
+}
+
+/*****************************************************************************/
+/*
+ * Read num_bytes from fd into buf.
+ * Report any errors.
+ */
+int read_fd(int fd, void *buf, size_t num_bytes)
+{
+    ssize_t bytes_read = read(fd, buf, num_bytes);
+
+    if (bytes_read != num_bytes) {
+	if (bytes_read < 0)
+	    logerror("Error reading file: %s\n", strerror(errno));
+	else
+	    logerror("Truncated file\n");
+    }
+
+    return (bytes_read == num_bytes);
 }
 
 /*****************************************************************************/
@@ -214,17 +242,17 @@ static int ezusb_write (
     int					device,
     char				*label,
     unsigned char			opcode,
-    unsigned short			addr,
+    unsigned int			addr,
     const unsigned char			*data,
     size_t				len
 ) {
     int					status;
 
     if (verbose)
-	logerror("%s, addr 0x%04x len %4zd (0x%04zx)\n", label, addr, len, len);
+	logerror("%s, addr 0x%05x len %4zd (0x%04zx)\n", label, addr, len, len);
     status = ctrl_msg (device,
 	USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE, opcode,
-	addr, 0,
+	addr & 0xFFFF, addr >> 16,
 	(unsigned char *) data, len);
     if (status != len) {
 	if (status < 0)
@@ -296,8 +324,8 @@ static inline int ezusb_get_eeprom_type (int fd, unsigned char *data)
 int parse_ihex (
     FILE	*image,
     void	*context,
-    int		(*is_external)(unsigned short addr, size_t len),
-    int		(*poke) (void *context, unsigned short addr, int external,
+    int		(*is_external)(unsigned int addr, size_t len),
+    int		(*poke) (void *context, unsigned int addr, int external,
 		      const unsigned char *data, size_t len)
 )
 {
@@ -430,6 +458,90 @@ int parse_ihex (
     return 0;
 }
 
+/*
+ * Parse a FX3 '.img' file and invoke the poke() function on the
+ * various segments to implement policies such as writing to RAM (with
+ * a one or two stage loader setup, depending on the firmware) or to
+ * EEPROM (two stages required).
+ *
+ * img_fd	- the image file
+ * context	- for use by poke()
+ * poke		- called with each memory segment; errors indicated
+ *		  by returning negative values.
+ *
+ * Caller is responsible for halting CPU as needed, such as when
+ * overwriting a second stage loader.
+ */
+int parse_img (
+    int		img_fd,
+    void	*context,
+    int 	(*poke) (void *context, unsigned int addr, int external,
+		      const unsigned char *data, size_t len)
+)
+{
+    unsigned char	header[4];
+    unsigned char	data[4096];
+    int			rc = -1;
+
+    /* Validate the header */
+    if (!read_fd(img_fd, header, sizeof(header)))
+	return -1;
+
+    if ((header[0] != 'C') || (header[1] != 'Y')) {
+	logerror("Invalid file: missing CYpress signature\n");
+	return -1;
+    }
+
+    if (header[3] != 0xB0) {
+	logerror("Invalid file: format 0x%02X, expected 0xB0\n", header[3]);
+	return -1;
+    }
+
+    /* Now process data segments */
+    do {
+	uint32_t  segment_addr, cur_addr;
+	uint32_t  segment_len, bytes_remaining, bytes_this_chunk;
+
+	rc = -1;	/* In case of error */
+	if (!read_fd(img_fd, &segment_len, sizeof(segment_len)))
+	    break;
+
+	if (!read_fd(img_fd, &segment_addr, sizeof(segment_addr)))
+	    break;
+
+	segment_len  = le32toh(segment_len) << 2;
+	segment_addr = le32toh(segment_addr);
+
+	cur_addr        = segment_addr;
+	bytes_remaining = segment_len;
+
+	/* Make sure we poke() if segment_len == 0,
+	 * as FX3 interprets this as a "run from address" command
+	 */
+
+	do {
+	    bytes_this_chunk = bytes_remaining;
+	    if (bytes_this_chunk > sizeof(data))
+		bytes_this_chunk = sizeof(data);
+
+	    if (bytes_this_chunk && !read_fd(img_fd, data, bytes_this_chunk)) {
+		rc = -1;
+		break;
+	    }
+
+	    rc = poke (context, cur_addr, 0, data, bytes_this_chunk);
+
+	    cur_addr        += bytes_this_chunk;
+	    bytes_remaining -= bytes_this_chunk;
+	} while ((rc == 0) && (bytes_remaining > 0));
+
+	if (segment_len == 0)
+	    break;
+
+    } while (rc == 0);
+
+    return rc;
+}
 
 /*****************************************************************************/
 
@@ -454,7 +566,7 @@ struct ram_poke_context {
 
 static int ram_poke (
     void		*context,
-    unsigned short	addr,
+    unsigned int	addr,
     int			external,
     const unsigned char	*data,
     size_t		len
@@ -466,7 +578,7 @@ static int ram_poke (
     switch (ctx->mode) {
     case internal_only:		/* CPU should be stopped */
 	if (external) {
-	    logerror("can't write %zd bytes external memory at 0x%04x\n",
+	    logerror("can't write %zd bytes external memory at 0x%05x\n",
 		len, addr);
 	    return -EINVAL;
 	}
@@ -474,7 +586,7 @@ static int ram_poke (
     case skip_internal:		/* CPU must be running */
 	if (!external) {
 	    if (verbose >= 2) {
-		logerror("SKIP on-chip RAM, %zd bytes at 0x%04x\n",
+		logerror("SKIP on-chip RAM, %zd bytes at 0x%05x\n",
 		    len, addr);
 	    }
 	    return 0;
@@ -483,7 +595,7 @@ static int ram_poke (
     case skip_external:		/* CPU should be stopped */
 	if (external) {
 	    if (verbose >= 2) {
-		logerror("SKIP external RAM, %zd bytes at 0x%04x\n",
+		logerror("SKIP external RAM, %zd bytes at 0x%05x\n",
 		    len, addr);
 	    }
 	    return 0;
@@ -513,6 +625,51 @@ static int ram_poke (
 }
 
 /*
+ * Load a FX3 'img' file into target RAM. The dev_fd is the open "usbfs"
+ * device, and the path is the name of the source file. Open the file,
+ * parse the bytes, and write them in one or two phases.
+ *
+ * This uses the first stage loader, built into FX3 hardware but limited
+ * to writing on-chip memory.  Everything is written during one stage.
+ */
+static int fx3_load_ram (int dev_fd, const char *path, int stage)
+{
+    int				image_fd;
+    struct ram_poke_context	ctx;
+    int				status;
+
+    if (stage != 0) {
+	logerror("Two-stage load not yet supported for FX3\n");
+	return -1;
+    }
+
+    image_fd = open(path, O_RDONLY);
+    if (image_fd < 0) {
+	logerror("%s: unable to open for input.\n", path);
+	return -2;
+    } else if (verbose)
+	logerror("open RAM image %s\n", path);
+
+    ctx.device = dev_fd;
+    ctx.total  = 0;
+    ctx.count  = 0;
+    ctx.mode   = internal_only;
+
+    status = parse_img(image_fd, &ctx, ram_poke);
+    if (status < 0) {
+	logerror("unable to download %s\n", path);
+	return status;
+    }
+
+    if (verbose) {
+	logerror("... WROTE: %d bytes, %d segments, avg %d\n",
+	    ctx.total, ctx.count, ctx.total / ctx.count);
+    }
+
+    return 0;
+}
+
+/*
  * Load an Intel HEX file into target RAM. The fd is the open "usbfs"
  * device, and the path is the name of the source file. Open the file,
  * parse the bytes, and write them in one or two phases.
@@ -526,13 +683,18 @@ static int ram_poke (
  * memory is written, expecting a second stage loader to have already
  * been loaded.  Then file is re-parsed and on-chip memory is written.
  */
-int ezusb_load_ram (int fd, const char *path, int fx2, int stage)
+int ezusb_load_ram (int fd, const char *path, const char *type, int stage)
 {
     FILE			*image;
     unsigned short		cpucs_addr;
-    int				(*is_external)(unsigned short off, size_t len);
+    int				(*is_external)(unsigned int off, size_t len);
     struct ram_poke_context	ctx;
     int				status;
+
+    /* FX3 loading differs significantly from that of previous devices */
+    if (strcmp(type, "fx3") == 0)
+	return fx3_load_ram (fd, path, stage);
+
 
     image = fopen (path, "r");
     if (image == 0) {
@@ -542,10 +704,10 @@ int ezusb_load_ram (int fd, const char *path, int fx2, int stage)
 	logerror("open RAM hexfile image %s\n", path);
 
     /* EZ-USB original/FX and FX2 devices differ, apart from the 8051 core */
-    if (fx2 == 2) {
+    if (strcmp(type, "fx2lp") == 0) {
 	cpucs_addr = 0xe600;
 	is_external = fx2lp_is_external;
-    } else if (fx2) {
+    } else if (strcmp(type, "fx2") == 0) {
 	cpucs_addr = 0xe600;
 	is_external = fx2_is_external;
     } else {
@@ -622,7 +784,7 @@ struct eeprom_poke_context {
 
 static int eeprom_poke (
     void		*context,
-    unsigned short	addr,
+    unsigned int	addr,
     int			external,
     const unsigned char	*data,
     size_t		len
@@ -633,7 +795,7 @@ static int eeprom_poke (
 
     if (external) {
       logerror(
-	    "EEPROM can't init %zd bytes external memory at 0x%04x\n",
+	    "EEPROM can't init %zd bytes external memory at 0x%05x\n",
 	    len, addr);
 	return -EINVAL;
     }
@@ -683,10 +845,15 @@ int ezusb_load_eeprom (int dev, const char *path, const char *type, int config)
 {
     FILE			*image;
     unsigned short		cpucs_addr;
-    int				(*is_external)(unsigned short off, size_t len);
+    int				(*is_external)(unsigned int off, size_t len);
     struct eeprom_poke_context	ctx;
     int				status;
     unsigned char		value, first_byte;
+
+    if (strcmp ("fx3", type) == 0) {
+	logerror("FX3 EEPROM loading is not yet supported.\n");
+	return -1;
+    }
 
     if (ezusb_get_eeprom_type (dev, &value) != 1 || value != 1) {
 	logerror("don't see a large enough EEPROM\n");
@@ -726,7 +893,7 @@ int ezusb_load_eeprom (int dev, const char *path, const char *type, int config)
 	is_external = fx2lp_is_external;
 	ctx.ee_addr = 8;
 	config &= 0x4f;
-	fprintf (stderr,
+	logerror (
 	    "FX2LP:  config = 0x%02x, %sconnected, I2C = %d KHz\n",
 	    config,
 	    (config & 0x40) ? "dis" : "",
